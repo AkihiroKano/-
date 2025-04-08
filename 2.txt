@@ -6,52 +6,58 @@ OUTPUT_PIPE="./server_output"
 # Проверка каналов
 [[ ! -p "$INPUT_PIPE" || ! -p "$OUTPUT_PIPE" ]] && { echo "Сервер не запущен!"; exit 1; }
 
-# Функция для подсчета B и C (аналогична серверной)
-calculate_bc() {
-    local target=$1
-    local guess=$2
-    local B=0
-    local C=0
-
-    # Преобразуем в массивы
-    local target_digits=($(echo "$target" | grep -o .))
-    local guess_digits=($(echo "$guess" | grep -o .))
-
-    # Считаем быков
-    for i in {0..4}; do
-        if [[ "${target_digits[i]}" == "${guess_digits[i]}" ]]; then
-            ((B++))
-            target_digits[i]="X"
-            guess_digits[i]="Y"
-        fi
+# Генерация всех возможных чисел (10000-99999)
+generate_numbers() {
+    for num in {10000..99999}; do
+        echo "$num"
     done
-
-    # Считаем коров
-    declare -A count
-    for d in "${target_digits[@]}"; do
-        [[ "$d" != "X" ]] && ((count[$d]++))
-    done
-
-    for d in "${guess_digits[@]}"; do
-        if [[ "$d" != "Y" && -n "${count[$d]}" && "${count[$d]}" -gt 0 ]]; then
-            ((C++))
-            ((count[$d]--))
-        fi
-    done
-
-    echo "$B $C"
 }
 
-# Генерируем все возможные числа (10000-99999)
-possible_numbers=()
-for num in {10000..99999}; do
-    possible_numbers+=("$num")
-done
+# Фильтрация чисел на основе B и C
+filter_numbers() {
+    local guess=$1
+    local target_B=$2
+    local target_C=$3
 
-# Основной цикл угадывания
+    # Разбиваем guess на цифры
+    guess_digits=($(grep -o . <<< "$guess"))
+
+    while read -r num; do
+        # Разбиваем текущее число на цифры
+        num_digits=($(grep -o . <<< "$num"))
+
+        # Подсчет быков (B)
+        B=0
+        for i in {0..4}; do
+            [[ "${num_digits[i]}" == "${guess_digits[i]}" ]] && ((B++))
+        done
+
+        # Подсчет коров (C)
+        declare -A count
+        for d in "${num_digits[@]}"; do
+            ((count[$d]++))
+        done
+
+        C=0
+        for d in "${guess_digits[@]}"; do
+            if [[ -n "${count[$d]}" && "${count[$d]}" -gt 0 ]]; then
+                ((C++))
+                ((count[$d]--))
+            fi
+        done
+        C=$((C - B))  # Убираем быков из коров
+
+        # Проверка соответствия target_B и target_C
+        [[ "$B" -eq "$target_B" && "$C" -eq "$target_C" ]] && echo "$num"
+    done
+}
+
+# Основной цикл
+mapfile -t possible < <(generate_numbers)
+
 for attempt in {1..50}; do
     # Выбираем первое число из списка
-    guess="${possible_numbers[0]}"
+    guess="${possible[0]}"
     echo "Попытка $attempt: $guess"
     echo "$guess" > "$INPUT_PIPE"
 
@@ -65,19 +71,11 @@ for attempt in {1..50}; do
         exit 0
     fi
 
-    # Фильтруем возможные числа
-    new_possible=()
-    for num in "${possible_numbers[@]}"; do
-        result=$(calculate_bc "$num" "$guess")
-        if [[ "$result" == "$B $C" ]]; then
-            new_possible+=("$num")
-        fi
-    done
-
-    possible_numbers=("${new_possible[@]}")
+    # Фильтрация возможных чисел
+    mapfile -t possible < <(printf "%s\n" "${possible[@]}" | filter_numbers "$guess" "$B" "$C")
 
     # Проверка на отсутствие вариантов
-    if [[ "${#possible_numbers[@]}" -eq 0 ]]; then
+    if [[ ${#possible[@]} -eq 0 ]]; then
         echo "Ошибка: Нет возможных чисел!"
         exit 1
     fi
