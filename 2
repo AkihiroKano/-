@@ -1,0 +1,55 @@
+#!/bin/bash
+
+SERVER_PIPE="server_pipe"
+CLIENT_PIPE="client_pipe"
+
+[[ -p "$SERVER_PIPE" && -p "$CLIENT_PIPE" ]] || {
+    echo "Run server.sh first" >&2
+    exit 1
+}
+
+MAX_ATTEMPTS=50
+current_guess="11223"  # Оптимальная стартовая комбинация
+used_digits=()
+
+calculate_next_guess() {
+    if [[ "${#used_digits[@]}" -lt 10 ]]; then
+        # Этап 1: Определение используемых цифр
+        for d in {0..9}; do
+            [[ " ${used_digits[*]} " =~ " $d " ]] || break
+        done
+        new_guess="${used_digits[*]:0:5}$d$d$d"
+        current_guess=$(echo "$new_guess" | tr -d ' ' | head -c5)
+    else
+        # Этап 2: Перебор оставшихся комбинаций
+        read -r B C < <(echo "$current_guess" | awk '{print ++$1}')
+        current_guess=$(printf "%05d" "$((current_guess + 1))")
+        [[ "$current_guess" -gt 99999 ]] && current_guess=12345
+    fi
+}
+
+for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
+    echo "$current_guess" > "$CLIENT_PIPE"
+    read -r B C < "$SERVER_PIPE"
+    echo "Attempt $attempt: $current_guess → B:$B C:$C"
+    
+    if [[ "$B" -eq 5 ]]; then
+        echo "Success! Number found: $current_guess"
+        echo "exit" > "$CLIENT_PIPE"
+        exit 0
+    fi
+    
+    # Анализ ответа и генерация новой догадки
+    if [[ "$B$C" == "00" ]]; then
+        # Исключаем все использованные цифры
+        while read -n1 digit; do
+            [[ " ${used_digits[*]} " =~ " $digit " ]] || used_digits+=("$digit")
+        done <<< "$current_guess"
+    fi
+    
+    calculate_next_guess
+done
+
+echo "Failed to guess in $MAX_ATTEMPTS attempts"
+echo "exit" > "$CLIENT_PIPE"
+exit 1
