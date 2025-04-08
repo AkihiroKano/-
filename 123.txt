@@ -3,53 +3,43 @@
 SERVER_PIPE="server_pipe"
 CLIENT_PIPE="client_pipe"
 
-[[ -p "$SERVER_PIPE" && -p "$CLIENT_PIPE" ]] || {
-    echo "Run server.sh first" >&2
-    exit 1
+cleanup() {
+    rm -f "$SERVER_PIPE" "$CLIENT_PIPE"
 }
 
-MAX_ATTEMPTS=50
-current_guess="11223"  # Оптимальная стартовая комбинация
-used_digits=()
+trap cleanup EXIT
+cleanup
+mkfifo "$SERVER_PIPE" "$CLIENT_PIPE"
 
-calculate_next_guess() {
-    if [[ "${#used_digits[@]}" -lt 10 ]]; then
-        # Этап 1: Определение используемых цифр
-        for d in {0..9}; do
-            [[ " ${used_digits[*]} " =~ " $d " ]] || break
-        done
-        new_guess="${used_digits[*]:0:5}$d$d$d"
-        current_guess=$(echo "$new_guess" | tr -d ' ' | head -c5)
-    else
-        # Этап 2: Перебор оставшихся комбинаций
-        read -r B C < <(echo "$current_guess" | awk '{print ++$1}')
-        current_guess=$(printf "%05d" "$((current_guess + 1))")
-        [[ "$current_guess" -gt 99999 ]] && current_guess=12345
-    fi
-}
+SECRET=$((10000 + RANDOM % 90000))
+echo "Secret number: $SECRET" >&2
 
-for ((attempt=1; attempt<=MAX_ATTEMPTS; attempt++)); do
-    echo "$current_guess" > "$CLIENT_PIPE"
-    read -r B C < "$SERVER_PIPE"
-    echo "Attempt $attempt: $current_guess → B:$B C:$C"
+while true; do
+    GUESS=$(cat "$CLIENT_PIPE")
+    [[ "$GUESS" == "exit" ]] && break
     
-    if [[ "$B" -eq 5 ]]; then
-        echo "Success! Number found: $current_guess"
-        echo "exit" > "$CLIENT_PIPE"
-        exit 0
+    if ! [[ "$GUESS" =~ ^[1-9][0-9]{4}$ ]]; then
+        echo "0 0" > "$SERVER_PIPE"
+        continue
     fi
+
+    B=0
+    SECRET_STR="$SECRET"
+    GUESS_STR="$GUESS"
+    declare -A secret_map guess_map
     
-    # Анализ ответа и генерация новой догадки
-    if [[ "$B$C" == "00" ]]; then
-        # Исключаем все использованные цифры
-        while read -n1 digit; do
-            [[ " ${used_digits[*]} " =~ " $digit " ]] || used_digits+=("$digit")
-        done <<< "$current_guess"
-    fi
-    
-    calculate_next_guess
+    for ((i=0; i<5; i++)); do
+        [[ "${SECRET_STR:i:1}" == "${GUESS_STR:i:1}" ]] && ((B++))
+        secret_map[${SECRET_STR:i:1}]=$((secret_map[${SECRET_STR:i:1}] + 1))
+        guess_map[${GUESS_STR:i:1}]=$((guess_map[${GUESS_STR:i:1}] + 1))
+    done
+
+    C=0
+    for d in "${!guess_map[@]}"; do
+        C=$((C + (secret_map[$d] < guess_map[$d] ? secret_map[$d] : guess_map[$d])))
+    done
+    C=$((C - B))
+
+    echo "$B $C" > "$SERVER_PIPE"
+    [[ "$B" -eq 5 ]] && break
 done
-
-echo "Failed to guess in $MAX_ATTEMPTS attempts"
-echo "exit" > "$CLIENT_PIPE"
-exit 1
