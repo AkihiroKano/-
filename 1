@@ -1,0 +1,45 @@
+#!/bin/bash
+
+SERVER_PIPE="server_pipe"
+CLIENT_PIPE="client_pipe"
+
+cleanup() {
+    rm -f "$SERVER_PIPE" "$CLIENT_PIPE"
+}
+
+trap cleanup EXIT
+cleanup
+mkfifo "$SERVER_PIPE" "$CLIENT_PIPE"
+
+SECRET=$((10000 + RANDOM % 90000))
+echo "Secret number: $SECRET" >&2
+
+while true; do
+    GUESS=$(cat "$CLIENT_PIPE")
+    [[ "$GUESS" == "exit" ]] && break
+    
+    if ! [[ "$GUESS" =~ ^[1-9][0-9]{4}$ ]]; then
+        echo "0 0" > "$SERVER_PIPE"
+        continue
+    fi
+
+    B=0
+    SECRET_STR="$SECRET"
+    GUESS_STR="$GUESS"
+    declare -A secret_map guess_map
+    
+    for ((i=0; i<5; i++)); do
+        [[ "${SECRET_STR:i:1}" == "${GUESS_STR:i:1}" ]] && ((B++))
+        secret_map[${SECRET_STR:i:1}]=$((secret_map[${SECRET_STR:i:1}] + 1))
+        guess_map[${GUESS_STR:i:1}]=$((guess_map[${GUESS_STR:i:1}] + 1))
+    done
+
+    C=0
+    for d in "${!guess_map[@]}"; do
+        C=$((C + (secret_map[$d] < guess_map[$d] ? secret_map[$d] : guess_map[$d])))
+    done
+    C=$((C - B))
+
+    echo "$B $C" > "$SERVER_PIPE"
+    [[ "$B" -eq 5 ]] && break
+done
