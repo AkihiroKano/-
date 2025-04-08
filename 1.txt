@@ -1,45 +1,70 @@
 #!/bin/bash
 
-SERVER_PIPE="server_pipe"
-CLIENT_PIPE="client_pipe"
+# Создаем именованные каналы в текущей директории
+INPUT_PIPE="./server_input"
+OUTPUT_PIPE="./server_output"
+mkfifo "$INPUT_PIPE" "$OUTPUT_PIPE" 2>/dev/null
 
-cleanup() {
-    rm -f "$SERVER_PIPE" "$CLIENT_PIPE"
+# Генерируем случайное пятизначное число
+TARGET=$(( RANDOM % 90000 + 10000 ))
+echo "Сервер загадал число: $TARGET" >&2
+
+# Функция для подсчета B и C
+calculate_bc() {
+    local target=$1
+    local guess=$2
+    local B=0
+    local C=0
+
+    # Преобразуем числа в массивы цифр
+    local target_digits=($(echo "$target" | grep -o .))
+    local guess_digits=($(echo "$guess" | grep -o .))
+
+    # Считаем быков (B)
+    for i in {0..4}; do
+        if [[ "${target_digits[i]}" == "${guess_digits[i]}" ]]; then
+            ((B++))
+            target_digits[i]="X"
+            guess_digits[i]="Y"
+        fi
+    done
+
+    # Считаем коров (C)
+    declare -A count
+    for d in "${target_digits[@]}"; do
+        [[ "$d" != "X" ]] && ((count[$d]++))
+    done
+
+    for d in "${guess_digits[@]}"; do
+        if [[ "$d" != "Y" && -n "${count[$d]}" && "${count[$d]}" -gt 0 ]]; then
+            ((C++))
+            ((count[$d]--))
+        fi
+    done
+
+    echo "$B $C"
 }
 
-trap cleanup EXIT
-cleanup
-mkfifo "$SERVER_PIPE" "$CLIENT_PIPE"
-
-SECRET=$((10000 + RANDOM % 90000))
-echo "Secret number: $SECRET" >&2
-
+# Основной цикл обработки запросов
 while true; do
-    GUESS=$(cat "$CLIENT_PIPE")
-    [[ "$GUESS" == "exit" ]] && break
+    # Читаем догадку из канала
+    guess=$(cat "$INPUT_PIPE")
     
-    if ! [[ "$GUESS" =~ ^[1-9][0-9]{4}$ ]]; then
-        echo "0 0" > "$SERVER_PIPE"
+    # Проверяем команду завершения
+    if [[ "$guess" == "QUIT" ]]; then
+        break
+    fi
+
+    # Проверяем корректность догадки
+    if ! [[ "$guess" =~ ^[0-9]{5}$ ]]; then
+        echo "ERROR" > "$OUTPUT_PIPE"
         continue
     fi
 
-    B=0
-    SECRET_STR="$SECRET"
-    GUESS_STR="$GUESS"
-    declare -A secret_map guess_map
-    
-    for ((i=0; i<5; i++)); do
-        [[ "${SECRET_STR:i:1}" == "${GUESS_STR:i:1}" ]] && ((B++))
-        secret_map[${SECRET_STR:i:1}]=$((secret_map[${SECRET_STR:i:1}] + 1))
-        guess_map[${GUESS_STR:i:1}]=$((guess_map[${GUESS_STR:i:1}] + 1))
-    done
-
-    C=0
-    for d in "${!guess_map[@]}"; do
-        C=$((C + (secret_map[$d] < guess_map[$d] ? secret_map[$d] : guess_map[$d])))
-    done
-    C=$((C - B))
-
-    echo "$B $C" > "$SERVER_PIPE"
-    [[ "$B" -eq 5 ]] && break
+    # Вычисляем B и C
+    result=$(calculate_bc "$TARGET" "$guess")
+    echo "$result" > "$OUTPUT_PIPE"
 done
+
+# Удаляем каналы
+rm -f "$INPUT_PIPE" "$OUTPUT_PIPE"
