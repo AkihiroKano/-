@@ -1,15 +1,81 @@
-#!/bin/bash
-echo $$ > .pid
-value=1
-mode="+"
-trap 'mode="+"' USR1
-trap 'mode="*"' USR2
-trap 'echo "Завершение работы"; exit' SIGTERM
-while true; do
-    case "$mode" in
-        "+") value=$((value + 2)) ;;
-        "*") value=$((value * 2)) ;;
-    esac
-    echo "Текущее значение: $value"
-    sleep 1
+#!/bin/sh
+
+SERVER_PIPE="server_pipe"
+CLIENT_PIPE="client_pipe"
+
+[ ! -p "$SERVER_PIPE" ] || [ ! -p "$CLIENT_PIPE" ] && {
+    echo "Ошибка: сначала запустите server.sh"
+    exit 1
+}
+
+# Инициализация
+MAX_ATTEMPTS=50
+ATTEMPT=0
+GUESS="12345"  # Оптимальная стартовая догадка
+declare -a POSSIBLE
+for i in {10000..99999}; do POSSIBLE+=("$i"); done
+
+filter_numbers() {
+    local guess=$1 bulls=$2 cows=$3
+    local new_possible=()
+    local g0=${guess:0:1} g1=${guess:1:1} g2=${guess:2:1} g3=${guess:3:1} g4=${guess:4:1}
+    
+    for num in "${POSSIBLE[@]}"; do
+        local b=0 c=0
+        local n0=${num:0:1} n1=${num:1:1} n2=${num:2:1} n3=${num:3:1} n4=${num:4:1}
+        
+        # Быки (прямые совпадения)
+        [ "$g0" = "$n0" ] && ((b++))
+        [ "$g1" = "$n1" ] && ((b++))
+        [ "$g2" = "$n2" ] && ((b++))
+        [ "$g3" = "$n3" ] && ((b++))
+        [ "$g4" = "$n4" ] && ((b++))
+        
+        # Коровы (только если не все цифры угаданы)
+        if [ $b -ne 5 ]; then
+            # Считаем общие уникальные цифры
+            local digits=""
+            for d in 0 1 2 3 4 5 6 7 8 9; do
+                [ "${guess//[^$d]/}" ] && [ "${num//[^$d]/}" ] && digits+="$d"
+            done
+            
+            for ((i=0; i<${#digits}; i++)); do
+                local d=${digits:i:1}
+                local cnt_g=$(tr -cd "$d" <<< "$guess" | wc -c)
+                local cnt_n=$(tr -cd "$d" <<< "$num" | wc -c)
+                ((c += cnt_g < cnt_n ? cnt_g : cnt_n))
+            done
+            ((c -= b))
+        fi
+        
+        [ "$b" -eq "$bulls" ] && [ "$c" -eq "$cows" ] && new_possible+=("$num")
+    done
+    
+    POSSIBLE=("${new_possible[@]}")
+}
+
+while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
+    ((ATTEMPT++))
+    
+    echo "$GUESS" > "$CLIENT_PIPE"
+    read B C < "$SERVER_PIPE"
+    echo "Попытка $ATTEMPT: $GUESS → Быки: $B, Коровы: $C"
+    
+    [ "$B" -eq 5 ] && {
+        echo "Угадано за $ATTEMPT попыток!"
+        echo "exit" > "$CLIENT_PIPE"
+        exit 0
+    }
+    
+    filter_numbers "$GUESS" "$B" "$C"
+    GUESS="${POSSIBLE[0]}"
+    
+    [ -z "$GUESS" ] && {
+        echo "Ошибка: противоречивые ответы сервера!"
+        exit 1
+    }
 done
+
+echo "Не угадано за $MAX_ATTEMPTS попыток."
+echo "exit" > "$CLIENT_PIPE"
+exit 1
